@@ -1,0 +1,159 @@
+"""
+NBA Player Performance Analysis
+--------------------------------
+Explores whether height and nationality determine NBA scoring success,
+using two Kaggle datasets: NBA player-season stats (1996-2022) and
+NBA rookie career-longevity data (1979-2020).
+
+Datasets:
+- justinas/nba-players-data
+- ignaciovinuales/nba-rookies-stay-longer-than-2-years
+"""
+
+import kagglehub
+import os
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+from scipy.stats import norm, ttest_ind
+from sklearn.linear_model import LinearRegression
+import math
+
+# ---------------------------------------------------------------------
+# 1. Load data
+# ---------------------------------------------------------------------
+players_path = kagglehub.dataset_download("justinas/nba-players-data")
+rookies_path = kagglehub.dataset_download("ignaciovinuales/nba-rookies-stay-longer-than-2-years")
+
+df = pd.read_csv(os.path.join(players_path, "all_seasons.csv"))
+df1 = pd.read_csv(os.path.join(rookies_path, "NBA_Rookies.csv"))
+
+print(df.info())
+print(df1.info())
+
+# ---------------------------------------------------------------------
+# 2. Height distribution
+# ---------------------------------------------------------------------
+plt.figure()
+sns.histplot(df["player_height"], bins=15)
+plt.title("Height Distribution")
+plt.xlabel("Height (cm)")
+plt.savefig("height_distribution.png", bbox_inches="tight")
+plt.show()
+
+print(f"Height stats -> mean: {df['player_height'].mean():.1f}cm, "
+      f"std: {df['player_height'].std():.1f}, min: {df['player_height'].min():.1f}cm")
+
+# ---------------------------------------------------------------------
+# 3. Points-per-game distribution
+# ---------------------------------------------------------------------
+plt.figure()
+sns.histplot(df["pts"], bins=15)
+plt.title("Points Distribution")
+plt.savefig("points_distribution.png", bbox_inches="tight")
+plt.show()
+
+# ---------------------------------------------------------------------
+# 4. Height vs. points relationship
+# ---------------------------------------------------------------------
+plt.figure()
+sns.scatterplot(data=df, x="pts", y="player_height")
+plt.title("Points by Height")
+plt.savefig("points_by_height.png", bbox_inches="tight")
+plt.show()
+
+# ---------------------------------------------------------------------
+# 5. Confidence interval: short players (<190cm) who average >25 PPG
+# ---------------------------------------------------------------------
+short_players = df[df["player_height"] < 190]
+x = short_players[short_players["pts"] > 25].shape[0]
+n = short_players.shape[0]
+p_hat = x / n
+
+confidence = 0.99
+z = norm.ppf(1 - (1 - confidence) / 2)
+se = math.sqrt(p_hat * (1 - p_hat) / n)
+ci_lower, ci_upper = p_hat - z * se, p_hat + z * se
+
+print(f"Players under 190cm: {n}, scoring >25 PPG: {x}")
+print(f"Observed proportion: {p_hat:.3f}")
+print(f"99% CI for proportion: ({ci_lower:.3f}, {ci_upper:.3f})")
+
+# ---------------------------------------------------------------------
+# 6. Linear regression: height -> points
+# ---------------------------------------------------------------------
+X = df[["player_height"]]
+y = df["pts"]
+model = LinearRegression().fit(X, y)
+df["PredictedPoints"] = model.predict(X)
+
+print(f"Intercept: {model.intercept_:.3f}")
+print(f"Coefficient for height: {model.coef_[0]:.4f}")
+
+plt.figure()
+plt.scatter(df["player_height"], df["pts"], alpha=0.5, label="Actual Points")
+plt.plot(df["player_height"], df["PredictedPoints"], color="red", label="Regression Line")
+plt.xlabel("Height (cm)")
+plt.ylabel("Points per Game")
+plt.title("Linear Regression: Points vs Height")
+plt.legend()
+plt.savefig("regression_height_points.png", bbox_inches="tight")
+plt.show()
+
+# ---------------------------------------------------------------------
+# 7. USA vs. non-USA player comparison
+# ---------------------------------------------------------------------
+df["Country_Group"] = df["country"].apply(lambda c: "USA" if c == "USA" else "Non-USA")
+print(df["Country_Group"].value_counts())
+
+stats_cols = ["pts", "ast", "reb", "ts_pct"]
+avg_stats = df.groupby("Country_Group")[stats_cols].mean().reset_index()
+print(avg_stats)
+
+avg_stats_melted = avg_stats.melt(id_vars="Country_Group", var_name="Stat", value_name="Average")
+plt.figure(figsize=(10, 6))
+sns.barplot(x="Stat", y="Average", hue="Country_Group", data=avg_stats_melted,
+            palette=["green", "blue"])
+plt.title("Comparison of Average Stats: USA vs Non-USA Players")
+plt.savefig("usa_vs_nonusa.png", bbox_inches="tight")
+plt.show()
+
+# ---------------------------------------------------------------------
+# 8. Hypothesis testing: are USA players statistically better?
+# ---------------------------------------------------------------------
+for var in stats_cols:
+    usa_vals = df[df["Country_Group"] == "USA"][var].dropna()
+    non_usa_vals = df[df["Country_Group"] == "Non-USA"][var].dropna()
+    t_stat, p_two_sided = ttest_ind(usa_vals, non_usa_vals, equal_var=False)
+    p_one_sided = p_two_sided / 2 if t_stat > 0 else 1 - (p_two_sided / 2)
+
+    result = "USA players significantly better" if p_one_sided < 0.05 else "No significant evidence USA players are better"
+    print(f"{var}: USA mean={usa_vals.mean():.2f}, Non-USA mean={non_usa_vals.mean():.2f}, "
+          f"t={t_stat:.3f}, p={p_one_sided:.3f} -> {result}")
+
+# ---------------------------------------------------------------------
+# 9. Rookie entry-age distribution
+# ---------------------------------------------------------------------
+plt.figure()
+sns.countplot(x="Age", data=df1)
+plt.title("Frequency of Rookie Entry Ages")
+plt.savefig("rookie_age_distribution.png", bbox_inches="tight")
+plt.show()
+
+# ---------------------------------------------------------------------
+# 10. Edge case: short, non-USA, high-scoring, late-entry player
+# ---------------------------------------------------------------------
+stats_filter = df[
+    (df["player_height"] < 190) &
+    (df["pts"] > 25) &
+    (df["country"] != "USA")
+]
+age_filter = df1[df1["Age"] > 27]
+rare_players = [p for p in stats_filter["player_name"] if p in age_filter["Player"].values]
+print(f"Players meeting all criteria (short, non-USA, >25 PPG, entered NBA after 27): {len(rare_players)}")
+
+# ---------------------------------------------------------------------
+# Summary statistics table
+# ---------------------------------------------------------------------
+print(df[["player_height", "pts", "ast", "reb", "ts_pct"]].describe())
+print(df1[["Age"]].describe())
